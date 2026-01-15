@@ -6,9 +6,30 @@ import pdfplumber
 import re
 from typing import List, Dict, Optional
 import os
+import json
+import time
 from pydantic import BaseModel
 
 app = FastAPI(title="Audit Question Analyzer")
+
+LOG_PATH = r"c:\Users\eller\audit-analyzer\.cursor\debug.log"
+
+
+def log_debug(location: str, message: str, data: Dict, hypothesis_id: str, run_id: str = "pre-fix") -> None:
+    payload = {
+        "sessionId": "debug-session",
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as log_file:
+            log_file.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -128,8 +149,44 @@ def analyze_requirement(question: str) -> Dict:
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """Serve the main HTML page"""
-    with open("static/index.html", "r") as f:
-        return f.read()
+    # region agent log
+    log_debug(
+        "app.py:read_root:entry",
+        "Entering read_root",
+        {"cwd": os.getcwd(), "path": "static/index.html"},
+        hypothesis_id="H1",
+    )
+    # endregion
+    try:
+        # region agent log
+        log_debug(
+            "app.py:read_root:before_open",
+            "About to open static index",
+            {"mode": "r", "encoding": None},
+            hypothesis_id="H1",
+        )
+        # endregion
+        with open("static/index.html", "r", encoding="utf-8") as f:
+            content = f.read()
+        # region agent log
+        log_debug(
+            "app.py:read_root:after_open",
+            "Read static index",
+            {"length": len(content)},
+            hypothesis_id="H1",
+        )
+        # endregion
+        return content
+    except Exception as exc:
+        # region agent log
+        log_debug(
+            "app.py:read_root:exception",
+            "Error reading static index",
+            {"type": type(exc).__name__, "error": str(exc)},
+            hypothesis_id="H1",
+        )
+        # endregion
+        raise
 
 
 @app.post("/upload", response_model=AnalysisResponse)
@@ -137,12 +194,28 @@ async def upload_pdf(file: UploadFile = File(...)):
     """
     Upload and process PDF file to extract and analyze audit questions.
     """
+    # region agent log
+    log_debug(
+        "app.py:upload_pdf:entry",
+        "Received upload request",
+        {"filename": file.filename, "content_type": file.content_type},
+        hypothesis_id="H2",
+    )
+    # endregion
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
     
     try:
         # Read PDF content
         contents = await file.read()
+        # region agent log
+        log_debug(
+            "app.py:upload_pdf:read",
+            "Read uploaded bytes",
+            {"size": len(contents)},
+            hypothesis_id="H2",
+        )
+        # endregion
         
         # Save temporarily
         temp_path = f"temp_{file.filename}"
@@ -151,7 +224,23 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         # Extract text from PDF
         text = ""
+        # region agent log
+        log_debug(
+            "app.py:upload_pdf:before_pdf_open",
+            "About to open PDF with pdfplumber",
+            {"temp_path": temp_path},
+            hypothesis_id="H3",
+        )
+        # endregion
         with pdfplumber.open(temp_path) as pdf:
+            # region agent log
+            log_debug(
+                "app.py:upload_pdf:pdf_opened",
+                "Opened PDF",
+                {"pages": len(pdf.pages)},
+                hypothesis_id="H3",
+            )
+            # endregion
             for page in pdf.pages:
                 page_text = page.extract_text()
                 if page_text:
