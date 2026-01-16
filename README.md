@@ -46,6 +46,19 @@ A web application that extracts audit questions from PDF documents and analyzes 
    http://localhost:8000
    ```
 
+## Deployment (Vercel)
+
+This project can be deployed to Vercel using the Python serverless runtime.
+
+1. **Push the repo to GitHub** (already done).
+2. **Import the repo in Vercel** and set the framework to "Other".
+3. **Configure environment variables (optional):**
+   - `OPENAI_API_KEY`
+   - `OPENAI_MODEL`, `LLM_TEXT_LIMIT`, `LLM_MAX_QUESTIONS` (optional overrides)
+4. **Deploy.**
+
+The included `vercel.json` routes all requests to `api/index.py`, which exposes the FastAPI app.
+
 ## Usage
 
 1. Upload a PDF document containing audit questions
@@ -75,9 +88,12 @@ Otherwise, it falls back to keyword-based analysis. For production use, you may 
 ```
 audit-analyzer/
 ├── app.py              # FastAPI backend application
+├── api/
+│   └── index.py        # Vercel serverless entrypoint
 ├── static/
 │   └── index.html      # Frontend web interface
 ├── requirements.txt    # Python dependencies
+├── vercel.json         # Vercel configuration
 └── README.md          # This file
 ```
 
