@@ -5,8 +5,8 @@ A web application that extracts audit questions from PDF documents and analyzes 
 ## Features
 
 - 📄 PDF document upload and text extraction
-- 🔍 Automatic question extraction using pattern matching
-- ✅ Requirement status analysis for each question
+- 🔍 Automatic question extraction using pattern matching (LLM optional)
+- ✅ Requirement status analysis for each question (LLM optional)
 - 📊 Summary statistics and detailed results display
 - 🎨 Modern, responsive web interface
 
@@ -34,7 +34,14 @@ A web application that extracts audit questions from PDF documents and analyzes 
    python app.py
    ```
 
-4. **Open your browser and navigate to:**
+4. **(Optional) Configure LLM analysis:**
+   - Set `OPENAI_API_KEY` in your environment to enable LLM parsing and analysis
+   - Optional overrides:
+     - `OPENAI_MODEL` (default: `gpt-4o-mini`)
+     - `LLM_TEXT_LIMIT` (default: `12000`)
+     - `LLM_MAX_QUESTIONS` (default: `200`)
+
+5. **Open your browser and navigate to:**
    ```
    http://localhost:8000
    ```
@@ -50,16 +57,16 @@ A web application that extracts audit questions from PDF documents and analyzes 
 
 ### Question Extraction
 
-The app uses pattern matching to identify questions in the PDF text:
+If `OPENAI_API_KEY` is set, the app uses an LLM to extract and analyze questions.
+If not, it falls back to pattern matching:
 - Numbered questions (1., 2., etc.)
 - Questions ending with question marks
 - Common audit question patterns (Does..., Is there..., Are..., etc.)
 
 ### Requirement Analysis
 
-Currently, the app uses keyword-based analysis to determine requirement status. For production use, you may want to:
-
-- Integrate with an LLM API (OpenAI, Anthropic, etc.) for more sophisticated analysis
+If `OPENAI_API_KEY` is set, the app uses an LLM to determine requirement status.
+Otherwise, it falls back to keyword-based analysis. For production use, you may want to:
 - Add evidence/documentation review capabilities
 - Implement custom business logic for your specific audit requirements
 

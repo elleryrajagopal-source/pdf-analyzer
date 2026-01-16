@@ -7,6 +7,7 @@ import re
 from typing import List, Dict, Optional
 import os
 import json
+import time
 import urllib.request
 import urllib.error
 from pydantic import BaseModel
@@ -17,6 +18,25 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 LLM_MAX_QUESTIONS = int(os.getenv("LLM_MAX_QUESTIONS", "200"))
 LLM_TEXT_LIMIT = int(os.getenv("LLM_TEXT_LIMIT", "12000"))
+
+LOG_PATH = r"c:\Users\eller\audit-analyzer\.cursor\debug.log"
+
+
+def log_debug(location: str, message: str, data: Dict, hypothesis_id: str, run_id: str = "pre-fix") -> None:
+    payload = {
+        "sessionId": "debug-session",
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as log_file:
+            log_file.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -159,6 +179,18 @@ def _extract_json_from_text(text: str) -> Optional[Dict]:
 
 
 def llm_extract_and_analyze(text: str) -> Optional[List[Dict]]:
+    # region agent log
+    log_debug(
+        "app.py:llm_extract_and_analyze:entry",
+        "LLM extraction entry",
+        {
+            "has_key": bool(OPENAI_API_KEY),
+            "key_length": len(OPENAI_API_KEY or ""),
+            "model": OPENAI_MODEL,
+        },
+        hypothesis_id="H4",
+    )
+    # endregion
     if not OPENAI_API_KEY:
         return None
     trimmed_text = text[:LLM_TEXT_LIMIT]
@@ -194,10 +226,26 @@ def llm_extract_and_analyze(text: str) -> Optional[List[Dict]]:
         method="POST",
     )
     try:
+        # region agent log
+        log_debug(
+            "app.py:llm_extract_and_analyze:before_request",
+            "Sending LLM request",
+            {"text_length": len(trimmed_text)},
+            hypothesis_id="H4",
+        )
+        # endregion
         with urllib.request.urlopen(request, timeout=60) as response:
             response_body = response.read().decode("utf-8")
         response_json = json.loads(response_body)
         content = response_json["choices"][0]["message"]["content"]
+        # region agent log
+        log_debug(
+            "app.py:llm_extract_and_analyze:response_ok",
+            "Received LLM response",
+            {"content_length": len(content)},
+            hypothesis_id="H4",
+        )
+        # endregion
         parsed = _extract_json_from_text(content)
         if not parsed or "questions" not in parsed:
             return None
@@ -205,7 +253,15 @@ def llm_extract_and_analyze(text: str) -> Optional[List[Dict]]:
         if not isinstance(questions, list):
             return None
         return questions[:LLM_MAX_QUESTIONS]
-    except (urllib.error.URLError, urllib.error.HTTPError, KeyError, json.JSONDecodeError):
+    except (urllib.error.URLError, urllib.error.HTTPError, KeyError, json.JSONDecodeError) as exc:
+        # region agent log
+        log_debug(
+            "app.py:llm_extract_and_analyze:exception",
+            "LLM request failed",
+            {"type": type(exc).__name__, "error": str(exc)},
+            hypothesis_id="H4",
+        )
+        # endregion
         return None
 
 
@@ -242,6 +298,17 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         # Extract questions (LLM if available, otherwise regex-based fallback)
         llm_questions = llm_extract_and_analyze(text)
+        # region agent log
+        log_debug(
+            "app.py:upload_pdf:llm_result",
+            "LLM extraction result",
+            {
+                "llm_used": llm_questions is not None,
+                "llm_count": len(llm_questions) if llm_questions else 0,
+            },
+            hypothesis_id="H4",
+        )
+        # endregion
         questions = []
         if llm_questions is not None:
             for item in llm_questions:
