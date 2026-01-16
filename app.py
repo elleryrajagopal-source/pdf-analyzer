@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 import os
 import json
 import time
+import io
 import urllib.request
 import urllib.error
 from pydantic import BaseModel
@@ -277,37 +278,24 @@ async def upload_pdf(file: UploadFile = File(...)):
         # Read PDF content
         contents = await file.read()
         
-        # Save temporarily
-        temp_path = f"temp_{file.filename}"
+        # Use in-memory buffer to avoid filesystem writes (Vercel is read-only).
         # region agent log
         log_debug(
-            "app.py:upload_pdf:temp_path",
-            "Temp path selected",
-            {"temp_path": temp_path, "cwd": os.getcwd()},
+            "app.py:upload_pdf:in_memory",
+            "Using in-memory buffer for PDF",
+            {"bytes": len(contents)},
             hypothesis_id="H5",
         )
         # endregion
-        # region agent log
-        log_debug(
-            "app.py:upload_pdf:before_write",
-            "About to write temp file",
-            {"temp_path": temp_path, "bytes": len(contents)},
-            hypothesis_id="H5",
-        )
-        # endregion
-        with open(temp_path, "wb") as f:
-            f.write(contents)
+        pdf_buffer = io.BytesIO(contents)
         
         # Extract text from PDF
         text = ""
-        with pdfplumber.open(temp_path) as pdf:
+        with pdfplumber.open(pdf_buffer) as pdf:
             for page in pdf.pages:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
-        
-        # Clean up temp file
-        os.remove(temp_path)
         
         if not text.strip():
             raise HTTPException(status_code=400, detail="Could not extract text from PDF")
