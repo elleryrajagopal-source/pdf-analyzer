@@ -7,29 +7,16 @@ import re
 from typing import List, Dict, Optional
 import os
 import json
-import time
+import urllib.request
+import urllib.error
 from pydantic import BaseModel
 
 app = FastAPI(title="Audit Question Analyzer")
 
-LOG_PATH = r"c:\Users\eller\audit-analyzer\.cursor\debug.log"
-
-
-def log_debug(location: str, message: str, data: Dict, hypothesis_id: str, run_id: str = "pre-fix") -> None:
-    payload = {
-        "sessionId": "debug-session",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with open(LOG_PATH, "a", encoding="utf-8") as log_file:
-            log_file.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+LLM_MAX_QUESTIONS = int(os.getenv("LLM_MAX_QUESTIONS", "200"))
+LLM_TEXT_LIMIT = int(os.getenv("LLM_TEXT_LIMIT", "12000"))
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -149,44 +136,77 @@ def analyze_requirement(question: str) -> Dict:
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """Serve the main HTML page"""
-    # region agent log
-    log_debug(
-        "app.py:read_root:entry",
-        "Entering read_root",
-        {"cwd": os.getcwd(), "path": "static/index.html"},
-        hypothesis_id="H1",
-    )
-    # endregion
+    with open("static/index.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _extract_json_from_text(text: str) -> Optional[Dict]:
+    text = text.strip()
+    if not text:
+        return None
     try:
-        # region agent log
-        log_debug(
-            "app.py:read_root:before_open",
-            "About to open static index",
-            {"mode": "r", "encoding": None},
-            hypothesis_id="H1",
-        )
-        # endregion
-        with open("static/index.html", "r", encoding="utf-8") as f:
-            content = f.read()
-        # region agent log
-        log_debug(
-            "app.py:read_root:after_open",
-            "Read static index",
-            {"length": len(content)},
-            hypothesis_id="H1",
-        )
-        # endregion
-        return content
-    except Exception as exc:
-        # region agent log
-        log_debug(
-            "app.py:read_root:exception",
-            "Error reading static index",
-            {"type": type(exc).__name__, "error": str(exc)},
-            hypothesis_id="H1",
-        )
-        # endregion
-        raise
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def llm_extract_and_analyze(text: str) -> Optional[List[Dict]]:
+    if not OPENAI_API_KEY:
+        return None
+    trimmed_text = text[:LLM_TEXT_LIMIT]
+    prompt = (
+        "Extract audit questions and analyze them. "
+        "Return ONLY valid JSON with this schema: "
+        "{"
+        "\"questions\":["
+        "{"
+        "\"question\":string,"
+        "\"requirement_met\":true|false|null,"
+        "\"confidence\":number,"
+        "\"reasoning\":string"
+        "}"
+        "]"
+        "}. "
+        "If no questions are found, return {\"questions\":[]}. "
+        "Text:\n"
+        f"{trimmed_text}"
+    )
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response_body = response.read().decode("utf-8")
+        response_json = json.loads(response_body)
+        content = response_json["choices"][0]["message"]["content"]
+        parsed = _extract_json_from_text(content)
+        if not parsed or "questions" not in parsed:
+            return None
+        questions = parsed["questions"]
+        if not isinstance(questions, list):
+            return None
+        return questions[:LLM_MAX_QUESTIONS]
+    except (urllib.error.URLError, urllib.error.HTTPError, KeyError, json.JSONDecodeError):
+        return None
 
 
 @app.post("/upload", response_model=AnalysisResponse)
@@ -194,28 +214,12 @@ async def upload_pdf(file: UploadFile = File(...)):
     """
     Upload and process PDF file to extract and analyze audit questions.
     """
-    # region agent log
-    log_debug(
-        "app.py:upload_pdf:entry",
-        "Received upload request",
-        {"filename": file.filename, "content_type": file.content_type},
-        hypothesis_id="H2",
-    )
-    # endregion
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
     
     try:
         # Read PDF content
         contents = await file.read()
-        # region agent log
-        log_debug(
-            "app.py:upload_pdf:read",
-            "Read uploaded bytes",
-            {"size": len(contents)},
-            hypothesis_id="H2",
-        )
-        # endregion
         
         # Save temporarily
         temp_path = f"temp_{file.filename}"
@@ -224,23 +228,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         # Extract text from PDF
         text = ""
-        # region agent log
-        log_debug(
-            "app.py:upload_pdf:before_pdf_open",
-            "About to open PDF with pdfplumber",
-            {"temp_path": temp_path},
-            hypothesis_id="H3",
-        )
-        # endregion
         with pdfplumber.open(temp_path) as pdf:
-            # region agent log
-            log_debug(
-                "app.py:upload_pdf:pdf_opened",
-                "Opened PDF",
-                {"pages": len(pdf.pages)},
-                hypothesis_id="H3",
-            )
-            # endregion
             for page in pdf.pages:
                 page_text = page.extract_text()
                 if page_text:
@@ -252,8 +240,19 @@ async def upload_pdf(file: UploadFile = File(...)):
         if not text.strip():
             raise HTTPException(status_code=400, detail="Could not extract text from PDF")
         
-        # Extract questions
-        questions = extract_questions_from_text(text)
+        # Extract questions (LLM if available, otherwise regex-based fallback)
+        llm_questions = llm_extract_and_analyze(text)
+        questions = []
+        if llm_questions is not None:
+            for item in llm_questions:
+                if not isinstance(item, dict):
+                    continue
+                question_text = item.get("question")
+                if not question_text:
+                    continue
+                questions.append(question_text.strip())
+        else:
+            questions = extract_questions_from_text(text)
         
         if not questions:
             raise HTTPException(
@@ -263,14 +262,28 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         # Analyze each question
         results = []
-        for question in questions:
-            analysis = analyze_requirement(question)
-            results.append(QuestionResult(
-                question=question,
-                requirement_met=analysis["requirement_met"],
-                confidence=analysis["confidence"],
-                reasoning=analysis["reasoning"]
-            ))
+        if llm_questions is not None:
+            for item in llm_questions:
+                if not isinstance(item, dict):
+                    continue
+                question_text = item.get("question", "").strip()
+                if not question_text:
+                    continue
+                results.append(QuestionResult(
+                    question=question_text,
+                    requirement_met=item.get("requirement_met"),
+                    confidence=float(item.get("confidence", 0.3)),
+                    reasoning=item.get("reasoning", "LLM analysis provided.")
+                ))
+        else:
+            for question in questions:
+                analysis = analyze_requirement(question)
+                results.append(QuestionResult(
+                    question=question,
+                    requirement_met=analysis["requirement_met"],
+                    confidence=analysis["confidence"],
+                    reasoning=analysis["reasoning"]
+                ))
         
         # Calculate statistics
         met_count = sum(1 for r in results if r.requirement_met is True)
