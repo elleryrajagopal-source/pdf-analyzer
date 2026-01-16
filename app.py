@@ -279,6 +279,22 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         # Save temporarily
         temp_path = f"temp_{file.filename}"
+        # region agent log
+        log_debug(
+            "app.py:upload_pdf:temp_path",
+            "Temp path selected",
+            {"temp_path": temp_path, "cwd": os.getcwd()},
+            hypothesis_id="H5",
+        )
+        # endregion
+        # region agent log
+        log_debug(
+            "app.py:upload_pdf:before_write",
+            "About to write temp file",
+            {"temp_path": temp_path, "bytes": len(contents)},
+            hypothesis_id="H5",
+        )
+        # endregion
         with open(temp_path, "wb") as f:
             f.write(contents)
         
@@ -364,6 +380,14 @@ async def upload_pdf(file: UploadFile = File(...)):
         )
     
     except Exception as e:
+        # region agent log
+        log_debug(
+            "app.py:upload_pdf:exception",
+            "Upload processing failed",
+            {"type": type(e).__name__, "error": str(e)},
+            hypothesis_id="H5",
+        )
+        # endregion
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 
