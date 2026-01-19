@@ -369,7 +369,6 @@
                 </div>
             `;
 
-
             // Display questions
             questionsList.innerHTML = data.questions.map((q, index) => {
                 let statusClass = 'status-unknown';
@@ -390,9 +389,11 @@
                     ? `<div class="evidence"><strong>Evidence:</strong> ${escapeHtml(q.evidence)}</div>`
                     : '';
 
+                const questionText = q.question || '';
+                const questionTextStripped = questionText.replace(/^\s*\d+[\.\)]\s*/, '');
                 return `
                     <div class="question-item">
-                        <div class="question-text">${index + 1}. ${escapeHtml(q.question)}</div>
+                        <div class="question-text">${index + 1}. ${escapeHtml(questionTextStripped)}</div>
                         <div class="question-meta">
                             <span class="status-badge ${statusClass}">${statusText}</span>
                             <span class="confidence">Confidence: ${(q.confidence * 100).toFixed(0)}%</span>
