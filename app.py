@@ -7,7 +7,6 @@ import re
 from typing import List, Dict, Optional
 import os
 import json
-import time
 import io
 import urllib.request
 import urllib.error
@@ -15,29 +14,13 @@ from pydantic import BaseModel
 
 app = FastAPI(title="Audit Question Analyzer")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.0-flash")
 LLM_MAX_QUESTIONS = int(os.getenv("LLM_MAX_QUESTIONS", "200"))
 LLM_TEXT_LIMIT = int(os.getenv("LLM_TEXT_LIMIT", "12000"))
 
-LOG_PATH = r"c:\Users\eller\audit-analyzer\.cursor\debug.log"
-
-
-def log_debug(location: str, message: str, data: Dict, hypothesis_id: str, run_id: str = "pre-fix") -> None:
-    payload = {
-        "sessionId": "debug-session",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with open(LOG_PATH, "a", encoding="utf-8") as log_file:
-            log_file.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
+ 
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -179,20 +162,45 @@ def _extract_json_from_text(text: str) -> Optional[Dict]:
         return None
 
 
-def llm_extract_and_analyze(text: str) -> Optional[List[Dict]]:
-    # region agent log
-    log_debug(
-        "app.py:llm_extract_and_analyze:entry",
-        "LLM extraction entry",
-        {
-            "has_key": bool(OPENAI_API_KEY),
-            "key_length": len(OPENAI_API_KEY or ""),
-            "model": OPENAI_MODEL,
+def _call_gemini(prompt: str, model_name: str, trimmed_text_length: int) -> Optional[List[Dict]]:
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ]
+    }
+    request_url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent"
+    request = urllib.request.Request(
+        f"{request_url}?key={GEMINI_API_KEY}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
         },
-        hypothesis_id="H4",
+        method="POST",
     )
-    # endregion
-    if not OPENAI_API_KEY:
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response_body = response.read().decode("utf-8")
+        response_json = json.loads(response_body)
+        content = response_json["candidates"][0]["content"]["parts"][0]["text"]
+        parsed = _extract_json_from_text(content)
+        if not parsed or "questions" not in parsed:
+            return None
+        questions = parsed["questions"]
+        if not isinstance(questions, list):
+            return None
+        return questions[:LLM_MAX_QUESTIONS]
+    except (urllib.error.URLError, urllib.error.HTTPError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def llm_extract_and_analyze(text: str) -> Optional[List[Dict]]:
+    if not GEMINI_API_KEY:
         return None
     trimmed_text = text[:LLM_TEXT_LIMIT]
     prompt = (
@@ -212,58 +220,18 @@ def llm_extract_and_analyze(text: str) -> Optional[List[Dict]]:
         "Text:\n"
         f"{trimmed_text}"
     )
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-    }
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        # region agent log
-        log_debug(
-            "app.py:llm_extract_and_analyze:before_request",
-            "Sending LLM request",
-            {"text_length": len(trimmed_text)},
-            hypothesis_id="H4",
-        )
-        # endregion
-        with urllib.request.urlopen(request, timeout=60) as response:
-            response_body = response.read().decode("utf-8")
-        response_json = json.loads(response_body)
-        content = response_json["choices"][0]["message"]["content"]
-        # region agent log
-        log_debug(
-            "app.py:llm_extract_and_analyze:response_ok",
-            "Received LLM response",
-            {"content_length": len(content)},
-            hypothesis_id="H4",
-        )
-        # endregion
-        parsed = _extract_json_from_text(content)
-        if not parsed or "questions" not in parsed:
-            return None
-        questions = parsed["questions"]
-        if not isinstance(questions, list):
-            return None
-        return questions[:LLM_MAX_QUESTIONS]
-    except (urllib.error.URLError, urllib.error.HTTPError, KeyError, json.JSONDecodeError) as exc:
-        # region agent log
-        log_debug(
-            "app.py:llm_extract_and_analyze:exception",
-            "LLM request failed",
-            {"type": type(exc).__name__, "error": str(exc)},
-            hypothesis_id="H4",
-        )
-        # endregion
-        return None
+    model_name = GEMINI_MODEL
+    if model_name.startswith("models/"):
+        model_name = model_name[len("models/") :]
+    fallback_model = GEMINI_FALLBACK_MODEL
+    if fallback_model.startswith("models/"):
+        fallback_model = fallback_model[len("models/") :]
+    result = _call_gemini(prompt, model_name, len(trimmed_text))
+    if result is not None:
+        return result
+    if fallback_model and fallback_model != model_name:
+        return _call_gemini(prompt, fallback_model, len(trimmed_text))
+    return None
 
 
 @app.post("/upload", response_model=AnalysisResponse)
@@ -279,14 +247,6 @@ async def upload_pdf(file: UploadFile = File(...)):
         contents = await file.read()
         
         # Use in-memory buffer to avoid filesystem writes (Vercel is read-only).
-        # region agent log
-        log_debug(
-            "app.py:upload_pdf:in_memory",
-            "Using in-memory buffer for PDF",
-            {"bytes": len(contents)},
-            hypothesis_id="H5",
-        )
-        # endregion
         pdf_buffer = io.BytesIO(contents)
         
         # Extract text from PDF
@@ -302,17 +262,6 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         # Extract questions (LLM if available, otherwise regex-based fallback)
         llm_questions = llm_extract_and_analyze(text)
-        # region agent log
-        log_debug(
-            "app.py:upload_pdf:llm_result",
-            "LLM extraction result",
-            {
-                "llm_used": llm_questions is not None,
-                "llm_count": len(llm_questions) if llm_questions else 0,
-            },
-            hypothesis_id="H4",
-        )
-        # endregion
         questions = []
         if llm_questions is not None:
             for item in llm_questions:
@@ -364,18 +313,10 @@ async def upload_pdf(file: UploadFile = File(...)):
             questions=results,
             total_questions=len(results),
             met_count=met_count,
-            not_met_count=not_met_count
+            not_met_count=not_met_count,
         )
     
     except Exception as e:
-        # region agent log
-        log_debug(
-            "app.py:upload_pdf:exception",
-            "Upload processing failed",
-            {"type": type(e).__name__, "error": str(e)},
-            hypothesis_id="H5",
-        )
-        # endregion
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 
