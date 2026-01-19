@@ -383,6 +383,13 @@
                     statusText = 'Requirement Not Met';
                 }
 
+                const answerHtml = q.answer
+                    ? `<div class="answer"><strong>Answer:</strong> ${escapeHtml(q.answer)}</div>`
+                    : '';
+                const evidenceHtml = q.evidence
+                    ? `<div class="evidence"><strong>Evidence:</strong> ${escapeHtml(q.evidence)}</div>`
+                    : '';
+
                 return `
                     <div class="question-item">
                         <div class="question-text">${index + 1}. ${escapeHtml(q.question)}</div>
@@ -391,6 +398,8 @@
                             <span class="confidence">Confidence: ${(q.confidence * 100).toFixed(0)}%</span>
                         </div>
                         <div class="reasoning">${escapeHtml(q.reasoning)}</div>
+                        ${answerHtml}
+                        ${evidenceHtml}
                     </div>
                 `;
             }).join('');

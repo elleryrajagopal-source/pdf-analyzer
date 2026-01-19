@@ -40,6 +40,8 @@ class QuestionResult(BaseModel):
     requirement_met: Optional[bool]
     confidence: float
     reasoning: str
+    answer: Optional[str] = None
+    evidence: Optional[str] = None
 
 
 class AnalysisResponse(BaseModel):
@@ -93,6 +95,32 @@ def extract_questions_from_text(text: str) -> List[str]:
     return cleaned_questions
 
 
+def _normalize_bool(value: Optional[object]) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "y", "met", "compliant", "satisfied", "fulfilled"}:
+            return True
+        if lowered in {"false", "no", "n", "not met", "non-compliant", "missing", "fails"}:
+            return False
+    return None
+
+
+def _derive_requirement_met(answer_value: Optional[object], requirement_value: Optional[object]) -> Optional[bool]:
+    normalized = _normalize_bool(requirement_value)
+    if normalized is not None:
+        return normalized
+    return _normalize_bool(answer_value)
+
+
+def _parse_confidence(value: Optional[object], default: float = 0.3) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
 def analyze_requirement(question: str) -> Dict:
     """
     Analyze whether an audit requirement is met.
@@ -133,7 +161,9 @@ def analyze_requirement(question: str) -> Dict:
     return {
         "requirement_met": requirement_met,
         "confidence": confidence,
-        "reasoning": reasoning
+        "reasoning": reasoning,
+        "answer": None,
+        "evidence": None,
     }
 
 
@@ -204,19 +234,26 @@ def llm_extract_and_analyze(text: str) -> Optional[List[Dict]]:
         return None
     trimmed_text = text[:LLM_TEXT_LIMIT]
     prompt = (
-        "Extract audit questions and analyze them. "
+        "You are an audit analyst. First, count the number of audit questions "
+        "present in the document. Then, for each question, determine the answer "
+        "using evidence from elsewhere in the document. Only provide an answer "
+        "and evidence when they are clearly supported by the text; otherwise use null. "
         "Return ONLY valid JSON with this schema: "
         "{"
+        "\"question_count\":number,"
         "\"questions\":["
         "{"
         "\"question\":string,"
+        "\"answer\":string|null,"
+        "\"evidence\":string|null,"
         "\"requirement_met\":true|false|null,"
         "\"confidence\":number,"
         "\"reasoning\":string"
         "}"
         "]"
         "}. "
-        "If no questions are found, return {\"questions\":[]}. "
+        "If no questions are found, return {\"question_count\":0,\"questions\":[]}. "
+        "Use short, direct quotes for evidence when available. "
         "Text:\n"
         f"{trimmed_text}"
     )
@@ -289,11 +326,19 @@ async def upload_pdf(file: UploadFile = File(...)):
                 question_text = item.get("question", "").strip()
                 if not question_text:
                     continue
+                answer = item.get("answer")
+                if isinstance(answer, str):
+                    answer = answer.strip() or None
+                evidence = item.get("evidence")
+                if isinstance(evidence, str):
+                    evidence = evidence.strip() or None
                 results.append(QuestionResult(
                     question=question_text,
-                    requirement_met=item.get("requirement_met"),
-                    confidence=float(item.get("confidence", 0.3)),
-                    reasoning=item.get("reasoning", "LLM analysis provided.")
+                    requirement_met=_derive_requirement_met(answer, item.get("requirement_met")),
+                    confidence=_parse_confidence(item.get("confidence"), 0.3),
+                    reasoning=item.get("reasoning", "LLM analysis provided."),
+                    answer=answer,
+                    evidence=evidence,
                 ))
         else:
             for question in questions:
@@ -302,7 +347,9 @@ async def upload_pdf(file: UploadFile = File(...)):
                     question=question,
                     requirement_met=analysis["requirement_met"],
                     confidence=analysis["confidence"],
-                    reasoning=analysis["reasoning"]
+                    reasoning=analysis["reasoning"],
+                    answer=analysis["answer"],
+                    evidence=analysis["evidence"],
                 ))
         
         # Calculate statistics

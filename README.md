@@ -66,6 +66,14 @@ The included `vercel.json` routes all requests to `api/index.py`, which exposes 
 3. Each question will be analyzed to determine if the requirement is met
 4. View the results with statistics and detailed analysis
 
+### Test PDFs
+
+Sample PDFs are available in `test_pdfs/`:
+- `audit_questions.pdf` (contains clear questions, answers, and evidence)
+- `no_questions.pdf` (no questions; should return a 400 response)
+- `ambiguous_evidence.pdf` (questions with unclear or conflicting evidence)
+- `policies_and_questions.pdf` (10 policies, then 20 audit questions; policies should not count as questions)
+
 ## How It Works
 
 ### Question Extraction
